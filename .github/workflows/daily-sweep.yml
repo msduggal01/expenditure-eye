@@ -1,0 +1,62 @@
+name: Edappadi Daily Expenditure Sweep
+
+on:
+  schedule:
+    - cron: '30 0 * * *'   # 00:30 UTC = 06:00 AM IST, every day
+  workflow_dispatch:        # allows manual trigger from GitHub UI
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run daily sweep
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_ID: ${{ secrets.AGENT_ID }}
+          ENVIRONMENT_ID: ${{ secrets.ENVIRONMENT_ID }}
+          VAULT_ID: ${{ secrets.VAULT_ID }}
+        run: |
+          pip install anthropic --quiet
+
+          python3 - <<'EOF'
+          import anthropic, os, time
+          from datetime import datetime
+
+          client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+          session = client.beta.sessions.create(
+              agent=os.environ["AGENT_ID"],
+              environment_id=os.environ["ENVIRONMENT_ID"],
+              vault_ids=[os.environ["VAULT_ID"]],
+              title=f"Daily Sweep {datetime.utcnow().strftime('%Y-%m-%d')}",
+              betas=["managed-agents-2026-04-01"],
+          )
+          print(f"Session created: {session.id}")
+
+          client.beta.sessions.events.send(
+              session_id=session.id,
+              events=[{
+                  "type": "user.message",
+                  "content": [{"type": "text", "text": (
+                      "Execute your full overnight intelligence sweep for AC 86-Edappadi now. "
+                      "Scan all sources, compile the Expenditure Alert Brief, and post it to "
+                      "Slack channel #edappadi-expenditure-eye."
+                  )}]
+              }],
+              betas=["managed-agents-2026-04-01"],
+          )
+
+          print("Waiting for sweep to complete...")
+          for _ in range(120):
+              time.sleep(10)
+              s = client.beta.sessions.retrieve(session.id, betas=["managed-agents-2026-04-01"])
+              print(f"Status: {s.status}")
+              if s.status in ("idle", "terminated"):
+                  print("Sweep complete.")
+                  break
+          else:
+              print("WARNING: Sweep timed out.")
+
+          client.beta.sessions.archive(session.id, betas=["managed-agents-2026-04-01"])
+          print("Session archived.")
+          EOF
