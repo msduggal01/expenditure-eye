@@ -1,0 +1,68 @@
+name: AI News Scout – Daily Delivery
+
+on:
+  schedule:
+    - cron: '30 0 * * *'   # 06:00 AM IST (UTC+5:30) every day
+  workflow_dispatch:        # allows manual trigger from GitHub UI for testing
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create session and wait for completion
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_ID: ${{ secrets.AGENT_ID }}
+          ENVIRONMENT_ID: ${{ secrets.ENVIRONMENT_ID }}
+          VAULT_ID: ${{ secrets.VAULT_ID }}
+        run: |
+          pip install anthropic --quiet
+
+          python3 << 'EOF'
+          import anthropic
+          import time
+
+          client = anthropic.Anthropic()
+
+          # Create session from existing agent
+          session = client.beta.sessions.create(
+              agent={"type": "agent", "id": __import__('os').environ['AGENT_ID']},
+              environment_id=__import__('os').environ['ENVIRONMENT_ID'],
+              vault_ids=[__import__('os').environ['VAULT_ID']],
+              title="AI News Scout – Daily Run",
+              betas=["managed-agents-2026-04-01"],
+          )
+          print(f"Session created: {session.id}")
+
+          # Send the trigger message
+          client.beta.sessions.events.send(
+              session_id=session.id,
+              events=[{
+                  "type": "user.message",
+                  "content": [{"type": "text", "text": "Run the daily AI news scan and post to Slack."}]
+              }],
+              betas=["managed-agents-2026-04-01"],
+          )
+
+          # Poll until idle/terminated
+          last_event_id = None
+          timeout = time.time() + 600  # 10 min max
+
+          while time.time() < timeout:
+              events = client.beta.sessions.events.list(
+                  session_id=session.id,
+                  after_id=last_event_id,
+                  betas=["managed-agents-2026-04-01"],
+              )
+              for event in events.data:
+                  last_event_id = event.id
+                  print(f"[{event.type}]", getattr(event, 'content', '')[:120] if hasattr(event, 'content') else '')
+                  if event.type in ("session.status_idle", "session.status_terminated"):
+                      print("Agent completed. Slack message delivered.")
+                      exit(0)
+              time.sleep(5)
+
+          print("Timeout reached — check session manually.")
+          exit(1)
+          EOF
